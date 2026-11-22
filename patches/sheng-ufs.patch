@@ -1,0 +1,163 @@
+diff --git a/NativeUfs.cpp b/NativeUfs.cpp
+index a10a979..f415ad3 100644
+--- a/NativeUfs.cpp
++++ b/NativeUfs.cpp
+@@ -1948,7 +1948,7 @@ public:
+   char *getVendorString () override { return const_cast<char *> ("Native"); }
+   char *getProductString () override { return label; }
+   char *getRevisionString () override { return const_cast<char *> ("1.0"); }
+-  char *getAdditionalDeviceInfoString () override { return const_cast<char *> ("UFS LUN 0 userdata window, read-only"); }
++  char *getAdditionalDeviceInfoString () override { return const_cast<char *> ("UFS LUN 0 " UNIXNU_SHENG_ROOT_PARTITION " window, read-only"); }
+   IOReturn reportBlockSize (UInt64 *value) override { *value = 512; return kIOReturnSuccess; }
+   IOReturn reportEjectability (bool *value) override { *value = false; return kIOReturnSuccess; }
+   IOReturn reportMaxValidBlock (UInt64 *value) override { *value = bytes / 512 - 1; return kIOReturnSuccess; }
+@@ -2857,7 +2857,7 @@ bool NativeUfs::start (IOService *provider)
+       panic ("NATIVE_UFS root check: %s", why);
+     }
+     panic ("NATIVE_UFS root check\n"
+-           "userdata first=%llx last=%llx\n"
++           UNIXNU_SHENG_ROOT_PARTITION " first=%llx last=%llx\n"
+            "block0 magic %08x %08x ext4magic=%04x ext4blocks=%u\n"
+            "manifest status=%u windows=%u",
+            layout->userdataFirst, layout->userdataLast, layout->magic0, layout->magic1,
+@@ -2885,7 +2885,7 @@ bool NativeUfs::start (IOService *provider)
+       }
+     }
+     panic ("NATIVE_UFS root windows\n"
+-           "userdata first=%llx last=%llx manifest status=%u windows=%u\n"
++           UNIXNU_SHENG_ROOT_PARTITION " first=%llx last=%llx manifest status=%u windows=%u\n"
+            "w0 %s off=%llx size=%llx gpt=%08x %08x read=%u\n"
+            "w1 %s off=%llx size=%llx gpt=%08x %08x read=%u\n"
+            "w0 sha %08x %08x %08x %08x\n"
+@@ -2957,7 +2957,7 @@ bool NativeUfs::startRoot (IOService *provider)
+   native_ufs_root_step = 3;
+   if (layout->manifestStatus != 0) {
+     rootDiagnosticFailure ("root manifest rejected");
+-    IOLog ("NativeUfs: no valid root manifest in userdata (status %u, magic %08x %08x)\n",
++    IOLog ("NativeUfs: no valid root manifest in " UNIXNU_SHENG_ROOT_PARTITION " (status %u, magic %08x %08x)\n",
+            layout->manifestStatus, layout->magic0, layout->magic1);
+     IOFree (layout, sizeof (RootLayout));
+     return false;
+diff --git a/README.md b/README.md
+index 7f39df6..0145410 100644
+--- a/README.md
++++ b/README.md
+@@ -29,6 +29,10 @@ compiler-generated arm64e pointer authentication.
+ tables travel in `kernel.macho.vroot`; only the owner public anchor is linked
+ into the kernel. On sheng it serves the iPadOS 27.0.1 (24A446) root and Data.
+ 
++The source build can set `UNIXNU_SHENG_ROOT_PARTITION` to `"unixnu"` or `"linux"`.
++The driver then requires the dedicated LUN 0 GPT entry for its verified root,
++Data and diagnostic windows. A missing entry stops root initialization.
++
+ ## Command path
+ 
+ Up to 32 commands run at once, one per command slot. The request list sits on
+diff --git a/RootLayout.h b/RootLayout.h
+index 82851d6..87d7126 100644
+--- a/RootLayout.h
++++ b/RootLayout.h
+@@ -1,6 +1,11 @@
+ // SPDX-License-Identifier: BSD-2-Clause-Patent
+ #pragma once
+ // Shared production parser. Requires hostRead4k, SHA256, diagnostics and C memory primitives.
++#ifndef UNIXNU_SHENG_ROOT_PARTITION
++#define UNIXNU_SHENG_ROOT_PARTITION "userdata"
++#endif
++static constexpr char kRootPartitionName[] = UNIXNU_SHENG_ROOT_PARTITION;
++
+ // ---- LUN 0 GPT and the root-image manifest -------------------------------------------------
+ struct RootWindow {
+   char name[32];
+@@ -56,7 +61,7 @@ static bool rootEntryUsed (const uint8_t *entry)
+   return used != 0;
+ }
+ 
+-// Find the partition named "userdata" in LUN 0's primary GPT (4096-byte sectors), then read the
++// Find the configured partition in LUN 0's primary GPT (4096-byte sectors), then read the
+ // manifest at its first block. Read-only. Returns false only if the GPT itself is unusable.
+ static bool findRootLayout (RootLayout *layout, const char **why)
+ {
+@@ -105,7 +110,6 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+     *why = "GPT entries CRC";
+     return false;
+   }
+-  static const char wanted[] = "userdata";
+   bool found = false;
+   for (uint32_t index = 0; index < count; index++) {
+     const uint8_t *entry = gScratch + index * 128;
+@@ -123,15 +127,15 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+       }
+     }
+     bool match = true;
+-    for (unsigned c = 0; c < sizeof (wanted); c++) {
+-      if (entry[56 + 2 * c] != static_cast<uint8_t> (wanted[c]) || entry[57 + 2 * c] != 0) {
++    for (unsigned c = 0; c < sizeof (kRootPartitionName); c++) {
++      if (entry[56 + 2 * c] != static_cast<uint8_t> (kRootPartitionName[c]) || entry[57 + 2 * c] != 0) {
+         match = false;
+         break;
+       }
+     }
+     if (match) {
+       if (found) {
+-        *why = "duplicate userdata partition";
++        *why = "duplicate " UNIXNU_SHENG_ROOT_PARTITION " partition";
+         return false;
+       }
+       layout->userdataFirst = le64 (entry + 32);
+@@ -140,7 +144,7 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+     }
+   }
+   if (!found || layout->userdataLast < layout->userdataFirst) {
+-    *why = "no userdata partition";
++    *why = "no " UNIXNU_SHENG_ROOT_PARTITION " partition";
+     return false;
+   }
+   gRootDiagnostic.first = layout->userdataFirst;
+@@ -148,7 +152,7 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+   gRootDiagnostic.stage = "root manifest";
+   // First block of the partition: manifest if the root image was flashed, ext4 otherwise.
+   if (hostRead4k (0, layout->userdataFirst, 1, gScratch) != kIOReturnSuccess) {
+-    *why = "userdata first block read";
++    *why = UNIXNU_SHENG_ROOT_PARTITION " first block read";
+     return false;
+   }
+   layout->magic0 = le32 (gScratch);
+diff --git a/tests/RootLayout.cpp b/tests/RootLayout.cpp
+index 37fc89d..36ceb2a 100644
+--- a/tests/RootLayout.cpp
++++ b/tests/RootLayout.cpp
+@@ -39,7 +39,7 @@ static void fixture() {
+   put64(header+24,1);put64(header+32,511);put64(header+40,6);put64(header+48,506);
+   put64(header+72,2);put32(header+80,32);put32(header+84,128);
+   entries[0]=1; entries[16]=2;put64(entries+32,8);put64(entries+40,506);
+-  for(unsigned i=0;i<8;++i)entries[56+2*i]="userdata"[i];
++  for(unsigned i=0;i<sizeof(kRootPartitionName);++i)entries[56+2*i]=kRootPartitionName[i];
+   memcpy(manifest,"SHNGROOT",8);put32(manifest+8,1);put32(manifest+12,2);put64(manifest+16,65536);
+   for(unsigned i=0;i<2;++i) {
+     uint8_t *e=manifest+24+i*128;strcpy(reinterpret_cast<char *>(e),i?"SystemOS":"OS");
+@@ -56,6 +56,24 @@ static void expect(const std::function<void()> &change,bool gpt,uint32_t status,
+ int main(int argc,char **argv) {
+   assert(rootCrc32(reinterpret_cast<const uint8_t *>("123456789"),9)==0xcbf43926);
+   expect([]{},true,0);
++  if (strcmp(kRootPartitionName, "userdata")) {
++    fixture();
++    memcpy(entries+128,entries,128);
++    put64(entries+40,127);
++    put64(entries+128+32,128);
++    memset(entries+56,0,72);
++    for(unsigned i=0;i<8;++i)entries[56+2*i]="userdata"[i];
++    userdata=128;
++    checksums();
++    RootLayout layout;
++    const char *why=nullptr;
++    assert(findRootLayout(&layout,&why) && layout.manifestStatus==0 && layout.userdataFirst==128);
++    entries[128]=0;
++    reads=0;
++    checksums();
++    assert(!findRootLayout(&layout,&why) && reads==2 &&
++           !strcmp(why,"no " UNIXNU_SHENG_ROOT_PARTITION " partition"));
++  }
+   expect([]{header[16]^=1;},false,0,false);
+   expect([]{entries[16]^=1;},false,0,false);
+   expect([]{put32(header+12,4097);},false,0);

@@ -1,0 +1,163 @@
+diff --git a/docs/drivers/sheng-ufs.md b/docs/drivers/sheng-ufs.md
+index 1521a89..7f616ff 100644
+--- a/docs/drivers/sheng-ufs.md
++++ b/docs/drivers/sheng-ufs.md
+@@ -19,10 +19,14 @@ also gives the display bank (`dpu-scanout`) and the WiFi endpoint
+ The component catalog supplies its kernel archive recipe. The selected device
+ profile enables `CONFIG_XNU_NATIVE_UFS` and supplies the board inputs.
+ 
+-Verified userdata windows publish internal virtual-storage characteristics.
++Verified root windows publish internal virtual-storage characteristics.
+ Disk Arbitration can retain their boot-time mounts before a console user logs in,
+ including the App cryptex at `/System/Volumes/Preboot/Cryptexes/App`.
+ 
++For a sheng source build with `[userdata] target_partition` set to `unixnu` or
++`linux`, the verified root, Data store and diagnostics use that LUN 0 GPT entry.
++Root initialization stops if the entry is missing.
++
+ ```sh
+ ./unixnu build kernel -D /path/to/device
+ ```
+diff --git a/docs/zh/drivers/sheng-ufs.md b/docs/zh/drivers/sheng-ufs.md
+index d4c1b84..1f93c10 100644
+--- a/docs/zh/drivers/sheng-ufs.md
++++ b/docs/zh/drivers/sheng-ufs.md
+@@ -15,9 +15,13 @@ ShengUfs 提供 SM8550 UFS 存储路径，管理主机控制器、SMMU 映射、
+ 
+ 组件目录提供内核 archive 构建命令。设备配置启用 `CONFIG_XNU_NATIVE_UFS` 并提供板级输入。
+ 
+-已校验的 userdata 窗口发布为内部虚拟存储。Disk Arbitration 可在控制台用户登录前
++已校验的根卷窗口发布为内部虚拟存储。Disk Arbitration 可在控制台用户登录前
+ 保留启动挂载，包括 `/System/Volumes/Preboot/Cryptexes/App` 下的 App cryptex。
+ 
++当 sheng 源码构建将 `[userdata] target_partition` 设为 `unixnu` 或 `linux` 时，
++已验证的根卷、可写 Data 和诊断区都位于 LUN 0 中指定的 GPT 分区。
++缺少该分区时，根卷初始化会停止。
++
+ ```sh
+ ./unixnu build kernel -D /path/to/device
+ ```
+diff --git a/scripts/build-sheng-source-storage.py b/scripts/build-sheng-source-storage.py
+index 906aae2..cde6adb 100644
+--- a/scripts/build-sheng-source-storage.py
++++ b/scripts/build-sheng-source-storage.py
+@@ -231,10 +231,15 @@ OSDefineOperatorMethods(IOBlockStorageDevice)
+         return
+     objects, inputs = [], {}
+     objcopy = tool('llvm-objcopy')
++    root_partition = os.environ.get('UNIXNU_SHENG_ROOT_PARTITION', 'userdata')
++    if root_partition not in ('userdata', 'unixnu', 'linux'):
++        parser.error('invalid ShengUfs root partition')
+     for source in sources:
+         record = (bsd if source.name in bsd_sources else c) if source.suffix == '.c' else cpp
+         output = out / (source.stem + '.o')
+         command = build.compile_command(record, source, output, includes, flags)
++        if root_partition != 'userdata' and source.name in ('NativeUfs.cpp', 'SourceStorage.cpp'):
++            command.append(f'-DUNIXNU_SHENG_ROOT_PARTITION="{root_partition}"')
+         if source == base:
+             command.append('-Wno-error')
+         result = subprocess.run(command, cwd=record['directory'], text=True,
+diff --git a/scripts/unixnu/kernel.py b/scripts/unixnu/kernel.py
+index 7858f42..78f9b7f 100644
+--- a/scripts/unixnu/kernel.py
++++ b/scripts/unixnu/kernel.py
+@@ -168,7 +168,9 @@ def build_archives(ctx, env):
+     """Build ordered component recipes and auxiliary archives from compile records."""
+     if not ctx.need_config().get('XNU_BUILD_ARCHIVES'):
+         return
++    from .userdata import target_partition
+     env = dict(env, PATH=toolchain_path(env.get('PATH')), UNIXNU_DEVICE=str(ctx.device))
++    env['UNIXNU_SHENG_ROOT_PARTITION'] = target_partition(ctx)
+     for index, (kind, entry) in enumerate(archive_plan(ctx), 1):
+         if kind == 'component':
+             spec = entry
+diff --git a/scripts/unixnu/userdata.py b/scripts/unixnu/userdata.py
+index 9a4f34a..bbdbf29 100644
+--- a/scripts/unixnu/userdata.py
++++ b/scripts/unixnu/userdata.py
+@@ -1,4 +1,4 @@
+-"""Userdata payload: the raw image for the device's `userdata` partition.
++"""Build the raw root image for a device's configured storage partition.
+ 
+ It holds the unchanged OS and SystemOS disk images of the IPSW, byte for byte, behind a small manifest
+ (the SHNGROOT layout the native UFS root driver reads):
+@@ -26,6 +26,8 @@ import json
+ import platform
+ import plistlib
+ import re
++import runpy
++import shlex
+ import struct
+ import subprocess
+ from pathlib import Path
+@@ -38,9 +40,28 @@ MIB = 1 << 20
+ CHUNK = 8 * MIB
+ 
+ 
++def target_partition(ctx):
++    name = ctx.board.get('userdata', {}).get('target_partition', 'userdata')
++    if name not in ('userdata', 'unixnu', 'linux'):
++        raise Error('[userdata] target_partition must be userdata, unixnu, or linux')
++    return name
++
++
+ def paths(ctx):
+     out = ctx.work / 'userdata'
+-    return out, out / 'userdata-root.img', out / 'userdata-root.json'
++    stem = 'userdata-root' if target_partition(ctx) == 'userdata' else 'unixnu-root'
++    return out, out / f'{stem}.img', out / f'{stem}.json'
++
++
++def dual_storage_bytes(ctx, root_bytes):
++    seed = ctx.option('data_ramdisk') or ctx.work / 'runtime/data.dbr'
++    seed_tools = runpy.run_path(str(ctx.root / 'scripts/seed-data-grow.py'))
++    try:
++        metadata, _ = seed_tools['packed_ramdisk'].inspect(seed)
++    except (OSError, ValueError) as error:
++        raise Error(f'{seed}: a valid macOS Data seed is required: {error}') from error
++    store = seed_tools['store_blocks'](metadata['bytes'] // 4096) * 4096
++    return root_bytes + store + seed_tools['GUARD_BLOCKS'] * 4096 + 1024 * MIB
+ 
+ 
+ def image_size(dmg):
+@@ -90,7 +111,14 @@ def build(ctx, dry_run=False):
+     if platform.system() == 'Darwin':
+         tool('hdiutil', 'the disk images are attached with macOS hdiutil')
+     source = Ipsw(ctx)
+-    capacity = (spec['last_lba'] - spec['first_lba'] + 1) * spec.get('lba_bytes', 4096)
++    partition = target_partition(ctx)
++    if partition != 'userdata':
++        capacity = spec.get('capacity_bytes')
++        if type(capacity) is not int or capacity <= 0 or capacity % MIB:
++            raise Error(f'[userdata] {partition} capacity_bytes must be positive and 1 MiB aligned')
++        log(f'{partition} partition capacity: {capacity} bytes')
++    else:
++        capacity = (spec['last_lba'] - spec['first_lba'] + 1) * spec.get('lba_bytes', 4096)
+     windows = []
+     for window in spec.get('windows', []):
+         try:
+@@ -133,7 +161,13 @@ def build(ctx, dry_run=False):
+     total = cursor
+     log(f'userdata: image {total} bytes ({total / 2**30:.2f} GiB) in a partition of {capacity} bytes')
+     if total > capacity:
+-        raise Error('the image is larger than the userdata partition')
++        raise Error(f'the image is larger than the {partition} partition')
++    required = total
++    if partition != 'userdata':
++        required = dual_storage_bytes(ctx, total)
++        if required > capacity:
++            raise Error(f'{partition} requires {required} bytes for root, Data and diagnostics, but only {capacity} are configured')
++        log(f'{partition}: root, Data and diagnostics require {required} bytes')
+     for name, dmg in sources:
+         log(f'userdata: {name} from {dmg.name}')
+     out, image, report = paths(ctx)
+@@ -177,7 +211,8 @@ def build(ctx, dry_run=False):
+     data = {'image_bytes': total, 'image_sha256': sha256_file(image), 'manifest_sha256': hashlib.sha256(bytes(header)).hexdigest(),
+             'windows': [{'name': n, 'offset': o, 'size': s, 'sha256': d.hex()} for n, o, s, d in entries],
+             'objects': [{'name': n, 'offset': o, 'size': s, 'sha256': d.hex()} for n, o, s, d in object_entries],
+-            'userdata_bytes': capacity, 'flash_command': f'fastboot flash userdata {image}',
++            'target_partition': partition, 'userdata_bytes': capacity, 'storage_required_bytes': required,
++            'flash_command': f'fastboot flash {partition} {shlex.quote(str(image))}',
+             'source': 'remote' if source.remote else 'local', 'hardware_tested': False}
+     report.write_text(json.dumps(data, indent=2) + '\n')
+     log(f'userdata: {image}')

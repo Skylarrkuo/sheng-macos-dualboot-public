@@ -1,0 +1,98 @@
+name: sheng macOS dual boot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  images:
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      UNIXNU_IPSW_JOBS: 16
+      ARTIFACT_RECIPIENT: ${{ vars.UNIXNU_ARTIFACT_RECIPIENT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify the build secrets are configured
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          UNIXNU_LAB_PASSWORD: ${{ secrets.UNIXNU_LAB_PASSWORD }}
+        run: |
+          if [[ ! $UNIXNU_UNIQUE_CHIP_ID =~ ^[0-9a-fA-F]{16}$ ||
+                $UNIXNU_UNIQUE_CHIP_ID == 0000000000000000 ||
+                -z $UNIXNU_LAB_PASSWORD ||
+                ! $ARTIFACT_RECIPIENT =~ ^age1[0-9a-z]+$ ]]; then
+            printf 'Configure the two device Secrets and the age public recipient.\n' >&2
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install the UniXNU build tools
+        run: |
+          df -h "$RUNNER_TEMP"
+          brew install dtc llvm lld llvm@22 lld@22 cmake mtools ninja glslang shaderc \
+            spirv-tools bison pkgconf rustup unifdef openssl@3 zstd age blacktop/tap/ipsw
+          rustup toolchain install 1.98.0 --profile minimal --component rust-src
+          {
+            echo "$HOME/.cargo/bin"
+            echo "$(brew --prefix bison)/bin"
+          } >> "$GITHUB_PATH"
+      - name: Build boot image and dedicated root image
+        id: build
+        env:
+          BUILD_WORKSPACE: ${{ runner.temp }}/sheng-${{ github.run_id }}-${{ github.run_attempt }}
+          GITHUB_TOKEN: ${{ github.token }}
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          UNIXNU_LAB_PASSWORD: ${{ secrets.UNIXNU_LAB_PASSWORD }}
+        run: |
+          if ! bash build-macos.sh "$BUILD_WORKSPACE" >"$RUNNER_TEMP/sheng-build.log" 2>&1; then
+            printf 'The build failed. The full log will be encrypted for download.\n' >&2
+            exit 1
+          fi
+      - name: Encrypt device-specific files
+        id: package
+        env:
+          BUILD_WORKSPACE: ${{ runner.temp }}/sheng-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -o pipefail
+          df -h "$BUILD_WORKSPACE"
+          target="$BUILD_WORKSPACE/UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos"
+          mkdir -p artifacts
+          for file in "$target/boot/boot.img" "$target/package.manifest.json" "$target/runtime/data.dbr" \
+                      "$target/userdata/unixnu-root.json"; do
+            age -r "$ARTIFACT_RECIPIENT" -o "artifacts/${file##*/}.age" "$file"
+          done
+          zstd -T0 -3 -c "$target/userdata/unixnu-root.img" \
+            | age -r "$ARTIFACT_RECIPIENT" \
+            | split -b 1024m -a 3 - artifacts/unixnu-root.img.zst.age.part-
+          cd artifacts
+          shasum -a 256 *.age *.age.part-* > SHA256SUMS
+      - name: Encrypt the diagnostic log
+        id: failure_report
+        if: ${{ failure() && steps.build.outcome == 'failure' }}
+        run: |
+          mkdir -p diagnostics
+          age -r "$ARTIFACT_RECIPIENT" -o diagnostics/sheng-build.log.age "$RUNNER_TEMP/sheng-build.log"
+      - name: Save encrypted files to a draft release
+        if: ${{ !cancelled() && (steps.package.outcome == 'success' || steps.failure_report.outcome == 'success') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_STATUS: ${{ steps.package.outcome }}
+        run: |
+          tag="sheng-macos-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ $PACKAGE_STATUS == success ]]; then
+            files=(artifacts/*.age artifacts/*.age.part-* artifacts/SHA256SUMS)
+            description="Encrypted device-specific images. The root image targets the linux partition."
+          else
+            files=(diagnostics/sheng-build.log.age)
+            description="Encrypted diagnostic log from an unsuccessful build."
+          fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "sheng macOS 27.3 images (run ${GITHUB_RUN_NUMBER})" \
+            --notes "$description" "${files[@]}"
