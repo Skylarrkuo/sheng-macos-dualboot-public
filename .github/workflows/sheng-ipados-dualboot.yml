@@ -154,9 +154,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="sheng-ipados27-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
-            --title "sheng iPadOS 27.0.1 (24A446), run ${GITHUB_RUN_NUMBER}" \
-            --notes "The root image targets the existing linux partition. Join the .zst.part-* files in filename order, decompress with zstd, and compare the raw SHA-256 with unixnu-root.json. Use boot.img and data.dbr from this draft." \
+          bash save-ipados-draft.sh "$tag" "sheng iPadOS 27.0.1 (24A446), run ${GITHUB_RUN_NUMBER}" \
+            "The root image targets the existing linux partition. Join the .zst.part-* files in filename order, decompress with zstd, and compare the raw SHA-256 with unixnu-root.json. Use boot.img and data.dbr from this draft." \
             artifacts/*
       - name: Save a diagnostic draft for a failed build
         if: ${{ failure() && steps.build.outcome == 'failure' }}
@@ -185,8 +184,12 @@ jobs:
                   log = source.read_text(errors='replace')
                   redacted = re.sub(re.escape(seed), '<device-seed>', log, flags=re.IGNORECASE)
                   (output / name).write_text(redacted)
+                  if name == 'ipados-build.log':
+                      errors = [line for line in redacted.splitlines() if len(line) < 500
+                                and re.search(r'^(unixnu:|[\w.]+Error:)|:\d+:\d+: (fatal )?error:', line)]
+                      for error in errors[-10:]:
+                          print(re.sub(r'(?i)\b[\da-f]{16}\b', '<hex16>', error))
           PY
-          gh release create "sheng-ipados27-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-diagnostic" \
-            --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
-            --title "sheng iPadOS failed build ${GITHUB_RUN_NUMBER}" \
-            --notes "Build diagnostics with the device seed redacted." diagnostics/*.log
+          bash save-ipados-draft.sh "sheng-ipados27-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-diagnostic" \
+            "sheng iPadOS failed build ${GITHUB_RUN_NUMBER}" \
+            "Build diagnostics with the device seed redacted." diagnostics/*.log
