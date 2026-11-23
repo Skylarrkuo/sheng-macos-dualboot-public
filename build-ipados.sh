@@ -12,9 +12,11 @@ if ! git apply --reverse --check "$bundle/patches/ipados-metal-bridge.patch" 2>/
 fi
 cp "$bundle/patches/metal2vulkan-ios-mach-vm.patch" scripts/data/
 device=../UniXNU-sheng
-if ! git -C "$device" apply --reverse --check "$bundle/patches/ipados-startup-log.patch" 2>/dev/null; then
-    git -C "$device" apply "$bundle/patches/ipados-startup-log.patch"
-fi
+for patch in ipados-startup-log.patch ipados-keyboard-log.patch; do
+    if ! git -C "$device" apply --reverse --check "$bundle/patches/$patch" 2>/dev/null; then
+        git -C "$device" apply "$bundle/patches/$patch"
+    fi
+done
 target=out/sheng/ipados-27.0.1-24A446/sheng_ipados27
 python3 - "$device/board.toml" "$bundle/ipados-linux.toml" <<'PY'
 from pathlib import Path
