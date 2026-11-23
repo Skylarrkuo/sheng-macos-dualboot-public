@@ -102,6 +102,8 @@ jobs:
           logs = {'ipados-build.log': Path(sys.argv[1]),
                   'runtime.log': target / 'logs/runtime.log',
                   'metal-bridge.log': target / 'tree/build/adreno-metal-bridge/build-ios27.log'}
+          for name in ('kernel-bootstrap.log', 'kernel.log', 'prelink.log'):
+              logs[name] = target / 'logs' / name
           output = Path('diagnostics')
           output.mkdir()
           for name, source in logs.items():
