@@ -5,9 +5,15 @@ bundle=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 workspace=${1:?Usage: bash build-ipados.sh BUILD_WORKSPACE}
 export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode_26.6.app/Contents/Developer}
 xcodebuild -version
+stage_started=$SECONDS
+report_duration() {
+    printf '== Build timing %s: %ss\n' "$1" "$((SECONDS - stage_started))"
+    stage_started=$SECONDS
+}
+
 bash "$bundle/prepare-sources.sh" "$workspace"
 cd "$workspace/UniXNU"
-for patch in ipados-metal-bridge.patch ipados-link-drivers.patch; do
+for patch in ipados-metal-bridge.patch ipados-link-drivers.patch ipados-compile-cache.patch; do
     if ! git apply --reverse --check "$bundle/patches/$patch" 2>/dev/null; then
         git apply "$bundle/patches/$patch"
     fi
@@ -47,11 +53,15 @@ export CLANG_BIN="$PWD/.cache/edk2-llvm22/"
 python3 "$device/scripts/extract-files.py"
 python3 "$bundle/pin-wifi-freebsd.py" "$device/drivers/Ath12kWifi"
 python3 "$device/drivers/Ath12kWifi/tools/fetch-sources.py"
+report_duration source-and-toolchain
 python3 "$bundle/prepare-ipados-root.py"
+report_duration verified-root-policies
 "$device/scripts/package.sh" --os 27 --uefi ../uefi-sheng --init-data
+report_duration boot-package
 ./unixnu build userdata -D "$device" --os 27 \
     --object "OS.vroot=$target/tree/build/verified-root-OS/hashes.bin" \
     --object "SystemOS.vroot=$target/tree/build/verified-root-SystemOS/hashes.bin"
+report_duration root-image
 
 python3 - "$target" <<'PY'
 import json

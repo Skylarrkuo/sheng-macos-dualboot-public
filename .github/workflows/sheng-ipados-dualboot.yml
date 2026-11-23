@@ -13,6 +13,7 @@ jobs:
     env:
       HOMEBREW_NO_AUTO_UPDATE: 1
       UNIXNU_IPSW_JOBS: 16
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -30,10 +31,14 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install the UniXNU build tools
+        id: tools
         run: |
           df -h "$RUNNER_TEMP"
-          printf 'BUILD_WORKSPACE=%s/sheng-ipados-%s-%s\n' \
-            "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          workspace="$RUNNER_TEMP/sheng-ipados"
+          {
+            echo "BUILD_WORKSPACE=$workspace"
+            echo "IPADOS_TREE=$workspace/UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/tree"
+          } >> "$GITHUB_ENV"
           brew install dtc llvm lld llvm@22 lld@22 cmake mtools ninja glslang shaderc \
             spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
@@ -41,16 +46,83 @@ jobs:
             echo "$HOME/.cargo/bin"
             echo "$(brew --prefix bison)/bin"
           } >> "$GITHUB_PATH"
+          fingerprint=$({
+            sw_vers -buildVersion
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            python3 --version
+            rustup run 1.98.0 rustc --version
+            brew list --versions llvm bison glslang ninja
+          } | shasum -a 256)
+          echo "fingerprint=${fingerprint%% *}" >> "$GITHUB_OUTPUT"
+      - name: Prepare the pinned source checkouts
+        run: bash prepare-sources.sh "$BUILD_WORKSPACE"
+      - name: Restore the device-independent GPU builds
+        uses: actions/cache/restore@v6.1.0
+        id: gpu-cache
+        with:
+          path: |
+            ${{ env.IPADOS_TREE }}/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a
+            ${{ env.IPADOS_TREE }}/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a.json
+            ${{ env.IPADOS_TREE }}/build/mesa-tu-ios27/src/freedreno/vulkan/libvulkan_freedreno.dylib
+            ${{ env.IPADOS_TREE }}/build/mesa-tu-ios27/qualified-ios27.json
+          key: ipados27-gpu-v1-${{ runner.arch }}-${{ steps.tools.outputs.fingerprint }}-${{ hashFiles('prepare-sources.sh', 'patches/ipados-compile-cache.patch', 'patches/ipados-metal-bridge.patch', 'patches/metal2vulkan-ios-mach-vm.patch') }}
+      - name: Restore the XNU comparison kernel
+        uses: actions/cache/restore@v6.1.0
+        id: reference-cache
+        with:
+          path: |
+            ${{ env.IPADOS_TREE }}/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
+            ${{ env.IPADOS_TREE }}/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.json
+          key: ipados27-reference-v1-${{ runner.arch }}-${{ steps.tools.outputs.fingerprint }}-${{ hashFiles('prepare-sources.sh', 'ipados-linux.toml', 'patches/ipados-compile-cache.patch', 'patches/ipados-startup-log.patch', 'patches/core.patch') }}
       - name: Build iPadOS boot image and Linux-partition root image
         id: build
         env:
           GITHUB_TOKEN: ${{ github.token }}
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
         run: |
-          if ! bash build-ipados.sh "$BUILD_WORKSPACE" >"$RUNNER_TEMP/ipados-build.log" 2>&1; then
+          log="$RUNNER_TEMP/ipados-build.log"
+          status=0
+          bash build-ipados.sh "$BUILD_WORKSPACE" >"$log" 2>&1 || status=$?
+          grep -E '^== Build timing [a-z-]+: [0-9]+s$' "$log" || true
+          if (( status != 0 )); then
             printf 'Build failed. See the diagnostic draft.\n' >&2
-            exit 1
+            exit "$status"
           fi
+      - name: Check which caches the build produced
+        id: cache-outputs
+        if: ${{ !cancelled() }}
+        run: |
+          if [[ -s $IPADOS_TREE/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a &&
+                -s $IPADOS_TREE/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a.json &&
+                -s $IPADOS_TREE/build/mesa-tu-ios27/src/freedreno/vulkan/libvulkan_freedreno.dylib &&
+                -s $IPADOS_TREE/build/mesa-tu-ios27/qualified-ios27.json ]]; then
+            echo 'gpu=yes' >> "$GITHUB_OUTPUT"
+          fi
+          reference="$IPADOS_TREE/build/xnu/fileset-reference/mach.release.bcm2837.unstripped"
+          if [[ -s $reference.noctf && -s $reference.json ]]; then
+            echo 'reference=yes' >> "$GITHUB_OUTPUT"
+          fi
+          grep -h -E '^(PASS: reused qualified Turnip library for ios27|PASS: reused unchanged ios27 Rust bridge from component [a-f0-9]+; frontend component [a-f0-9]+|reference inputs and digest match \(lto\): .*)$' \
+            "$IPADOS_TREE/../logs/runtime.log" "$IPADOS_TREE/../logs/"archive-*-build-fileset-release-reference.log 2>/dev/null || true
+      - name: Save the device-independent GPU builds
+        if: ${{ !cancelled() && steps.cache-outputs.outputs.gpu == 'yes' && steps.gpu-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
+            ${{ env.IPADOS_TREE }}/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a
+            ${{ env.IPADOS_TREE }}/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a.json
+            ${{ env.IPADOS_TREE }}/build/mesa-tu-ios27/src/freedreno/vulkan/libvulkan_freedreno.dylib
+            ${{ env.IPADOS_TREE }}/build/mesa-tu-ios27/qualified-ios27.json
+          key: ${{ steps.gpu-cache.outputs.cache-primary-key }}
+      - name: Save the XNU comparison kernel
+        if: ${{ !cancelled() && steps.cache-outputs.outputs.reference == 'yes' && steps.reference-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
+            ${{ env.IPADOS_TREE }}/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
+            ${{ env.IPADOS_TREE }}/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.json
+          key: ${{ steps.reference-cache.outputs.cache-primary-key }}
       - name: Package and verify the release files
         run: |
           set -o pipefail

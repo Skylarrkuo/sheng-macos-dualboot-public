@@ -1,0 +1,83 @@
+diff --git a/scripts/build-turnip-darwin.py b/scripts/build-turnip-darwin.py
+--- a/scripts/build-turnip-darwin.py
++++ b/scripts/build-turnip-darwin.py
+@@ -119,6 +119,35 @@
+ build_id = hashlib.sha256(json.dumps(dict(mesa_revision=pins['mesa']['commit'], source_diff_sha256=profile['source_diff_sha256'],
+                                           extra_sources=source_extras), sort_keys=True).encode()).hexdigest()[:40]
+ options += ['-Dtu-build-id=' + build_id]
++library = OUT / 'src/freedreno/vulkan/libvulkan_freedreno.dylib'
++cache_record = OUT / 'qualified-ios27.json'
++cacheable = args.target == 'ios27' and not args.configure_only and not args.builtin_pack
++
++
++def library_digest():
++    with library.open('rb') as stream:
++        return hashlib.file_digest(stream, 'sha256').hexdigest()
++
++
++def validate_library():
++    symbols = subprocess.run(['nm', '-gU', str(library)], capture_output=True, text=True).stdout
++    if ' T _vk_icdGetInstanceProcAddr' not in symbols:
++        sys.exit('The library does not export vk_icdGetInstanceProcAddr')
++
++
++if cacheable:
++    cache_inputs = {'source': source_id, 'sdk': sdk,
++                    'abi': hashlib.sha256((ROOT / 'drivers/Adreno740/NativeAdrenoABI.h').read_bytes()).hexdigest()}
++    try:
++        saved = json.loads(cache_record.read_text())
++        reused = saved == {'inputs': cache_inputs, 'sha256': library_digest()}
++    except (OSError, ValueError):
++        reused = False
++    if reused:
++        validate_library()
++        print('PASS: reused qualified Turnip library for ios27')
++        sys.exit(0)
++    cache_record.unlink(missing_ok=True)
+ log = LOGS / ('mesa-tu-%s-configure.log' % args.target)
+ with log.open('w') as stream:
+     # Reconfigure with the current host programs and build options.
+@@ -134,9 +163,8 @@
+ if result.returncode:
+     sys.exit('Build failed; see ' + str(build_log) + '\n' + '\n'.join(
+         l for l in build_log.read_text().splitlines() if ': error:' in l or 'fatal error:' in l or l.startswith('FAILED:'))[:3000])
+-library = OUT / 'src/freedreno/vulkan/libvulkan_freedreno.dylib'
+-symbols = subprocess.run(['nm', '-gU', str(library)], capture_output=True, text=True).stdout
+-if ' T _vk_icdGetInstanceProcAddr' not in symbols:
+-    sys.exit('The library does not export vk_icdGetInstanceProcAddr')
++validate_library()
++if cacheable:
++    cache_record.write_text(json.dumps({'inputs': cache_inputs, 'sha256': library_digest()}, indent=2) + '\n')
+ print('PASS: Turnip with the darwin kernel backend builds for %s (%d bytes); no GPU or IOKit service was exercised'
+       % (args.target, library.stat().st_size))
+diff --git a/scripts/build-fileset-release-reference.py b/scripts/build-fileset-release-reference.py
+--- a/scripts/build-fileset-release-reference.py
++++ b/scripts/build-fileset-release-reference.py
+@@ -82,6 +82,9 @@
+     sdk = root / '.cache/fakeroot'
+     target = os.environ.get('UNIXNU_XNU_TARGET', 'ios')
+     deployment = target_define(target)
++    # A comparison kernel uses the fixed flags below and never carries an installation seed.
++    build_environment = {name: value for name, value in os.environ.items()
++                         if name not in ('XNU_OWNER_DATA_VOLUME_UUID', 'UNIXNU_UNIQUE_CHIP_ID')}
+     archives = [root/'build/corecrypto-2023/libcorecrypto_kernel_noasm-namespaced.a']
+     forced = [root/f'build/{folder}/{name}' for folder,name in (
+         ('libpthread-kernel','libpthread_kernel.a'),('armdt-platform','libArmDTPlatform.a'),('armcpu','libArmCpu.a'))]
+@@ -96,7 +99,7 @@
+             ('UNIXNU_IOS_VERSION', '26.0'), ('UNIXNU_XNU_DARWIN', '25.5.0'),
+             ('UNIXNU_XNU_VERSION', '12377.121.6'))},
+         'compiler': subprocess.check_output(['xcrun', 'clang', '--version'], text=True),
+-        'environment': {name: value for name, value in os.environ.items()
++        'environment': {name: value for name, value in build_environment.items()
+                         if name.startswith(('XNU_', 'RC_', 'CCC_')) or name in ('CC', 'CXX', 'LD')},
+     }
+     if reusable(final, cache_record, inputs):
+@@ -122,7 +125,7 @@
+         manifest = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest()
+                     for p in source.rglob('*') if p.is_file()}
+         (output/'source-sha256.json').write_text(json.dumps(manifest,indent=2)+'\n')
+-    env = dict(os.environ, KERNEL_SDKROOT=str(sdk),
++    env = dict(build_environment, KERNEL_SDKROOT=str(sdk),
+                XNU_AVAILABILITY_PL=str(sdk/'usr/local/libexec/availability.pl'))
+     flags = '-Wno-reserved-identifier -Wno-pre-c11-compat -Wno-missing-designated-field-initializers -Wno-suggest-override -Wno-unnecessary-virtual-specifier -Wno-suggest-destructor-override -Wno-ms-bitfield-padding -DXNU_NATIVE_PAN=1 -DXNU_SOURCE_CORECRYPTO14=1 -DXNU_BOOT_PROGRESS=0'
+     args = ['make','-C',str(source),'build','SDKROOT=iphoneos',
