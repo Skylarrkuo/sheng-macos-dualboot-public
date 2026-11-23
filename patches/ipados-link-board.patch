@@ -1,0 +1,67 @@
+diff --git a/package/BootLog.c b/package/BootLog.c
+--- a/package/BootLog.c
++++ b/package/BootLog.c
+@@ -374,10 +374,12 @@
+ extern uint64_t cs_native4k_read_ticks __attribute__((weak_import)), cs_native4k_hash_ticks __attribute__((weak_import)),
+   cs_native4k_bytes __attribute__((weak_import));
+ extern unsigned long cs_native4k_ready_blobs __attribute__((weak_import));
++#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+ extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import)), cs_native4k_digest_cpu[2] __attribute__((weak_import)),
+   cs_native4k_digest_bytes[2] __attribute__((weak_import)), cs_native4k_chunk_ticks __attribute__((weak_import)),
+   cs_native4k_record_ticks __attribute__((weak_import));
+ extern unsigned long cs_native4k_chunks_made __attribute__((weak_import));
++#endif
+ extern volatile uint32_t sheng_edge_idle_beside_queued[2][8] __attribute__((weak_import));
+ extern volatile uint32_t native_touch_cost[9] __attribute__((weak_import));
+ extern volatile uint32_t native_touch_irq_stats[4] __attribute__((weak_import));
+@@ -1004,6 +1006,7 @@
+              (unsigned long long)(cs_native4k_bytes >> 20), (unsigned long long)(read_ns / 1000000), (unsigned long long)(hash_ns / 1000000));
+     at = put(out, at, cap, row, sizeof row);
+   }
++#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+   // The digests alone (cssha-digest-time.patch): MiB hashed, wall ms and the threads' own CPU ms, on efficiency cores and
+   // on the others; then the chunks of lazy answers made, the ms making them and the ms recording answers.
+   if (&cs_native4k_digest_wall && &cs_native4k_digest_cpu && &cs_native4k_digest_bytes && &cs_native4k_chunk_ticks &&
+@@ -1023,6 +1026,7 @@
+              (unsigned long long)(chunk_ns / 1000000), (unsigned long long)(record_ns / 1000000));
+     at = put(out, at, cap, row, sizeof row);
+   }
++#endif
+   if (log_display_on && &native_legacy_swap_rejected_count && native_legacy_swap_rejected_count) {
+     char row[220];
+     snprintf(row, sizeof row, "REJ acc=%u rej=%u r=%u st=%x/%x/%x op=%x/%x/%x wh=%ux%u s=%llx/%llx/%llx/%llx cls=%.24s",
+diff --git a/package/LegacyDisplayProbe.cpp b/package/LegacyDisplayProbe.cpp
+--- a/package/LegacyDisplayProbe.cpp
++++ b/package/LegacyDisplayProbe.cpp
+@@ -532,8 +532,10 @@
+ extern void sheng_wifi_probe(void);
+ extern void sheng_bluetooth_probe(void) __attribute__((weak_import));
+ extern void sheng_usb_probe(void) __attribute__((weak_import));
++#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+ extern "C" void sheng_ethernet_probe(void) __attribute__((weak_import));   // macOS builds only (ShengEthernet.cpp)
+ extern "C" void sheng_software_aes_probe(void) __attribute__((weak_import));   // macOS builds only (SoftwareAesProbe.cpp)
++#endif
+ extern void sheng_adsp_probe(void);
+ extern void sheng_battery_probe(void);
+ extern void sheng_audio_probe(void);
+@@ -617,8 +619,10 @@
+
+ void native_legacy_display_late_probe(void) {
+     {thread_t thread = nullptr; if (kernel_thread_start(busyReport, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);}
++#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+     // First: AppleImage4's start already waits for an IOAESAccelerator, holding its expert lock (SoftwareAesProbe.cpp).
+     if (sheng_software_aes_probe) sheng_software_aes_probe();
++#endif
+     native_keystore_probe();
+     sheng_cpufreq_probe();
+     if (sheng_thermal_probe) sheng_thermal_probe();
+@@ -631,7 +635,9 @@
+     sheng_wifi_probe();
+     if (sheng_bluetooth_probe) sheng_bluetooth_probe();
+     if (sheng_usb_probe) sheng_usb_probe();
++#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+     if (sheng_ethernet_probe) sheng_ethernet_probe();
++#endif
+     sheng_adsp_probe();
+     sheng_battery_probe();
+     sheng_audio_probe();

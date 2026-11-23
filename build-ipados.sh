@@ -7,12 +7,14 @@ export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode_26.6.app/Contents/Deve
 xcodebuild -version
 bash "$bundle/prepare-sources.sh" "$workspace"
 cd "$workspace/UniXNU"
-if ! git apply --reverse --check "$bundle/patches/ipados-metal-bridge.patch" 2>/dev/null; then
-    git apply "$bundle/patches/ipados-metal-bridge.patch"
-fi
+for patch in ipados-metal-bridge.patch ipados-link-drivers.patch; do
+    if ! git apply --reverse --check "$bundle/patches/$patch" 2>/dev/null; then
+        git apply "$bundle/patches/$patch"
+    fi
+done
 cp "$bundle/patches/metal2vulkan-ios-mach-vm.patch" scripts/data/
 device=../UniXNU-sheng
-for patch in ipados-startup-log.patch ipados-keyboard-log.patch ipados-sleep-log.patch; do
+for patch in ipados-startup-log.patch ipados-keyboard-log.patch ipados-sleep-log.patch ipados-link-board.patch; do
     if ! git -C "$device" apply --reverse --check "$bundle/patches/$patch" 2>/dev/null; then
         git -C "$device" apply "$bundle/patches/$patch"
     fi
