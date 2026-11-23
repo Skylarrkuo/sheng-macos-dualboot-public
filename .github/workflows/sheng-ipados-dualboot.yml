@@ -104,6 +104,8 @@ jobs:
                   'metal-bridge.log': target / 'tree/build/adreno-metal-bridge/build-ios27.log'}
           for name in ('kernel-bootstrap.log', 'kernel.log', 'prelink.log'):
               logs[name] = target / 'logs' / name
+          for source in (target / 'logs').glob('archive-*.log'):
+              logs[source.name] = source
           output = Path('diagnostics')
           output.mkdir()
           for name, source in logs.items():

@@ -12,7 +12,7 @@ if ! git apply --reverse --check "$bundle/patches/ipados-metal-bridge.patch" 2>/
 fi
 cp "$bundle/patches/metal2vulkan-ios-mach-vm.patch" scripts/data/
 device=../UniXNU-sheng
-for patch in ipados-startup-log.patch ipados-keyboard-log.patch; do
+for patch in ipados-startup-log.patch ipados-keyboard-log.patch ipados-sleep-log.patch; do
     if ! git -C "$device" apply --reverse --check "$bundle/patches/$patch" 2>/dev/null; then
         git -C "$device" apply "$bundle/patches/$patch"
     fi
