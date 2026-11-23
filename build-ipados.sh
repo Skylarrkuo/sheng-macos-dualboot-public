@@ -7,6 +7,10 @@ export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode_26.6.app/Contents/Deve
 xcodebuild -version
 bash "$bundle/prepare-sources.sh" "$workspace"
 cd "$workspace/UniXNU"
+if ! git apply --reverse --check "$bundle/patches/ipados-metal-bridge.patch" 2>/dev/null; then
+    git apply "$bundle/patches/ipados-metal-bridge.patch"
+fi
+cp "$bundle/patches/metal2vulkan-ios-mach-vm.patch" scripts/data/
 device=../UniXNU-sheng
 target=out/sheng/ipados-27.0.1-24A446/sheng_ipados27
 python3 - "$device/board.toml" "$bundle/ipados-linux.toml" <<'PY'

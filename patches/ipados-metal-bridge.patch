@@ -1,0 +1,12 @@
+diff --git a/scripts/build-adreno-metal-bridge.py b/scripts/build-adreno-metal-bridge.py
+--- a/scripts/build-adreno-metal-bridge.py
++++ b/scripts/build-adreno-metal-bridge.py
+@@ -30,6 +30,8 @@
+ PATCHES = [ROOT / 'drivers/AdrenoMetal/bridge/patches' / name for name in [
+     '0063-main-optimizations-on-development-46e7cc96.patch',
+     '0064-copies-leave-unreachable-pages-alone.patch']]
++if args.target == 'ios27':
++    PATCHES.append(ROOT / 'scripts/data/metal2vulkan-ios-mach-vm.patch')
+
+
+ def git_tree(*steps):
