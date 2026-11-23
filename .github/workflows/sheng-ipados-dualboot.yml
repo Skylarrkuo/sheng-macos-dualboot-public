@@ -92,17 +92,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
         run: |
-          python3 - "$RUNNER_TEMP/ipados-build.log" <<'PY'
+          python3 - "$RUNNER_TEMP/ipados-build.log" "$BUILD_WORKSPACE" <<'PY'
           import os
           from pathlib import Path
           import re
           import sys
           seed = os.environ['UNIXNU_UNIQUE_CHIP_ID']
-          log = Path(sys.argv[1]).read_text(errors='replace')
-          log = re.sub(re.escape(seed), '<device-seed>', log, flags=re.IGNORECASE)
-          Path('ipados-build.log').write_text(log)
+          target = Path(sys.argv[2]) / 'UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27'
+          logs = {'ipados-build.log': Path(sys.argv[1]),
+                  'runtime.log': target / 'logs/runtime.log',
+                  'metal-bridge.log': target / 'tree/build/adreno-metal-bridge/build-ios27.log'}
+          output = Path('diagnostics')
+          output.mkdir()
+          for name, source in logs.items():
+              if source.is_file():
+                  log = source.read_text(errors='replace')
+                  redacted = re.sub(re.escape(seed), '<device-seed>', log, flags=re.IGNORECASE)
+                  (output / name).write_text(redacted)
           PY
           gh release create "sheng-ipados27-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-diagnostic" \
             --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
             --title "sheng iPadOS failed build ${GITHUB_RUN_NUMBER}" \
-            --notes "Build diagnostics with the device seed redacted." ipados-build.log
+            --notes "Build diagnostics with the device seed redacted." diagnostics/*.log
