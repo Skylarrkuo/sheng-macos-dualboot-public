@@ -1,0 +1,10 @@
+# Per-profile overrides for the existing sheng Linux partition.
+["os_overrides"."ipados-27.0.1-24A446"."userdata"]
+"target_partition" = "linux"
+"capacity_bytes" = 124748038144
+
+["os_overrides"."ipados-27.0.1-24A446"."payload"."runtime"]
+"data_gib" = 90
+
+["os_overrides"."ipados-27.0.1-24A446"."bootimg"]
+"max_image_bytes" = 201326592

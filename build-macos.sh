@@ -46,33 +46,7 @@ fi
 
 ./unixnu defconfig sheng_macos_defconfig -D ../UniXNU-sheng --os macos-27
 ./unixnu fetch --os macos-27
-wifi=../UniXNU-sheng/drivers/Ath12kWifi
-# A fresh upstream checkout follows the FreeBSD branch before checking its pin.
-# Fetch the locked revision first so the branch moving cannot change the inputs.
-if [[ ! -e $wifi/deps/freebsd ]]; then
-    python3 - "$wifi" <<'PY'
-import json
-import subprocess
-import sys
-from pathlib import Path
-
-wifi = Path(sys.argv[1]).resolve()
-source = json.loads((wifi / 'tools/source-lock.json').read_text())['freebsd']
-directory = wifi / 'deps/freebsd'
-directory.mkdir(parents=True)
-commands = [
-    ['init', '-q'],
-    ['remote', 'add', 'origin', source['url']],
-    ['config', 'remote.origin.promisor', 'true'],
-    ['config', 'remote.origin.partialclonefilter', 'blob:none'],
-    ['sparse-checkout', 'init', '--cone'],
-    ['fetch', '--depth', '1', '--filter=blob:none', 'origin', source['commit']],
-    ['switch', '--detach', 'FETCH_HEAD'],
-]
-for command in commands:
-    subprocess.run(['git', '-C', str(directory), *command], check=True)
-PY
-fi
+python3 "$bundle/pin-wifi-freebsd.py" ../UniXNU-sheng/drivers/Ath12kWifi
 python3 ../UniXNU-sheng/scripts/prepare-macos-install.py
 ../UniXNU-sheng/scripts/package.sh --os macos-27 --uefi ../uefi-sheng
 python3 - "$target" <<'PY'

@@ -1,0 +1,107 @@
+name: sheng iPadOS dual boot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  images:
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      UNIXNU_IPSW_JOBS: 16
+      BUILD_WORKSPACE: ${{ runner.temp }}/sheng-ipados-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the device Secret
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+        run: |
+          if [[ ! $UNIXNU_UNIQUE_CHIP_ID =~ ^[a-fA-F0-9]{16}$ ||
+                $UNIXNU_UNIQUE_CHIP_ID == 0000000000000000 ]]; then
+            printf 'Configure the full CPUID in the repository Secret.\n' >&2
+            exit 1
+          fi
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Install the UniXNU build tools
+        run: |
+          df -h "$RUNNER_TEMP"
+          brew install dtc llvm lld llvm@22 lld@22 cmake mtools ninja glslang shaderc \
+            spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
+          rustup toolchain install 1.98.0 --profile minimal --component rust-src
+          {
+            echo "$HOME/.cargo/bin"
+            echo "$(brew --prefix bison)/bin"
+          } >> "$GITHUB_PATH"
+      - name: Build iPadOS boot image and Linux-partition root image
+        id: build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+        run: |
+          if ! bash build-ipados.sh "$BUILD_WORKSPACE" >"$RUNNER_TEMP/ipados-build.log" 2>&1; then
+            printf 'Build failed. See the diagnostic draft.\n' >&2
+            exit 1
+          fi
+      - name: Package and verify the release files
+        run: |
+          set -o pipefail
+          target="$BUILD_WORKSPACE/UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27"
+          mkdir artifacts
+          cp "$target/boot/boot.img" "$target/package.manifest.json" \
+            "$target/runtime/data.dbr" "$target/userdata/unixnu-root.json" artifacts/
+          zstd -T0 -3 -c "$target/userdata/unixnu-root.img" \
+            | split -b 1024m -a 3 - artifacts/unixnu-root.img.zst.part-
+          cd artifacts
+          expected=$(python3 -c 'import json; print(json.load(open("unixnu-root.json"))["image_sha256"])')
+          actual=$(cat unixnu-root.img.zst.part-* | zstd -dc | shasum -a 256)
+          if [[ ${actual%% *} != "$expected" ]]; then
+            printf 'Root image checksum differs after joining and decompressing the parts.\n' >&2
+            exit 1
+          fi
+          shasum -a 256 boot.img data.dbr unixnu-root.json package.manifest.json \
+            unixnu-root.img.zst.part-* > SHA256SUMS
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = json.loads(Path('unixnu-root.json').read_text())
+          print(f"Boot image: {Path('boot.img').stat().st_size} bytes")
+          print(f"Root image: {root['image_bytes']} bytes, partition: {root['target_partition']}")
+          print(f"Required capacity: {root['storage_required_bytes']} of {root['userdata_bytes']} bytes")
+          PY
+      - name: Save the images as a Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="sheng-ipados27-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "sheng iPadOS 27.0.1 (24A446), run ${GITHUB_RUN_NUMBER}" \
+            --notes "The root image targets the existing linux partition. Join the .zst.part-* files in filename order, decompress with zstd, and compare the raw SHA-256 with unixnu-root.json. Use boot.img and data.dbr from this draft." \
+            artifacts/*
+      - name: Save a diagnostic draft for a failed build
+        if: ${{ failure() && steps.build.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+        run: |
+          python3 - "$RUNNER_TEMP/ipados-build.log" <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          seed = os.environ['UNIXNU_UNIQUE_CHIP_ID']
+          log = Path(sys.argv[1]).read_text(errors='replace')
+          log = re.sub(re.escape(seed), '<device-seed>', log, flags=re.IGNORECASE)
+          Path('ipados-build.log').write_text(log)
+          PY
+          gh release create "sheng-ipados27-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-diagnostic" \
+            --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "sheng iPadOS failed build ${GITHUB_RUN_NUMBER}" \
+            --notes "Build diagnostics with the device seed redacted." ipados-build.log

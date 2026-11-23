@@ -23,6 +23,8 @@
 
 ## 使用 GitHub 托管 macOS runner
 
+工作流 **sheng iPadOS dual boot** 构建 iPadOS 27.0.1（`24A446`），使用同一 `linux` 分区和独立的 90 GiB Data 种子。它只读取设备 Secret `UNIXNU_UNIQUE_CHIP_ID`，将未加密的启动镜像和压缩的根镜像分卷存入 Release 草稿。刷入任一系统的根镜像都会覆盖该 `linux` 分区中的另一套系统。
+
 将本目录内容放在 GitHub 仓库根目录，保留 `.github/workflows/`。在仓库 **Settings → Secrets and variables → Actions** 添加 `UNIXNU_UNIQUE_CHIP_ID` 和 `UNIXNU_LAB_PASSWORD`。用 `age-keygen` 生成密钥，在 Actions Variables 中添加公钥 `UNIXNU_ARTIFACT_RECIPIENT`，将私钥保存在本机。再从 **Actions → sheng macOS dual boot → Run workflow** 启动。工作流使用标准 `macos-26` 和 Xcode 26.6。公共仓库的标准 runner 不扣私有仓库的计算额度。
 
 在同一条 Release 草稿中下载加密产物，并校验 `SHA256SUMS`。按文件名顺序拼接 `unixnu-root.img.zst.age.part-*`，用本机 age 私钥解密，再用 zstd 解压得到 `unixnu-root.img`。其余 `.age` 文件可以单独解密。实际目标分区在 `unixnu-root.json` 里应为 `linux`。保留原始 `data.dbr` 供后续更新使用。
