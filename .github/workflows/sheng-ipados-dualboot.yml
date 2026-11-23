@@ -13,7 +13,6 @@ jobs:
     env:
       HOMEBREW_NO_AUTO_UPDATE: 1
       UNIXNU_IPSW_JOBS: 16
-      BUILD_WORKSPACE: ${{ runner.temp }}/sheng-ipados-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -33,6 +32,8 @@ jobs:
       - name: Install the UniXNU build tools
         run: |
           df -h "$RUNNER_TEMP"
+          printf 'BUILD_WORKSPACE=%s/sheng-ipados-%s-%s\n' \
+            "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
           brew install dtc llvm lld llvm@22 lld@22 cmake mtools ninja glslang shaderc \
             spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
