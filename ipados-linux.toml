@@ -8,3 +8,7 @@
 
 ["os_overrides"."ipados-27.0.1-24A446"."bootimg"]
 "max_image_bytes" = 201326592
+
+["os_overrides"."ipados-27.0.1-24A446"."components"]
+# The Novatek touch archive is built inside the display recipe and needs GENI SPI in the assembled tree.
+"include" = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengPreflight", "ShengUfs", "RamBlock", "GopFramebuffer", "AppleKeyStoreState", "Adreno740", "AdrenoMetal", "QcomGeniSpi"]
